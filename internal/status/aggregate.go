@@ -69,7 +69,7 @@ func BuildReport(snapshot store.Snapshot, apiary domain.Apiary, asOf time.Time) 
 		report.Hives = append(report.Hives, summary)
 	}
 	for _, due := range snapshot.InspectionDues(apiary.ID) {
-		if NeedsInspectionAt(due.DueAt, snapshot.GeneratedAt) {
+		if NeedsInspectionAt(due.DueAt, asOf) {
 			report.NeedsInspection = append(report.NeedsInspection, due.HiveID)
 		}
 	}

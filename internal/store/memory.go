@@ -69,6 +69,7 @@ func (m *Memory) CreateHive(hive domain.Hive) error {
 		return domain.Conflict("蜂箱 %q 已存在", hive.ID)
 	}
 	m.hives[hive.ID] = hive
+	m.refreshInspectionScheduleLocked(hive.ID)
 	return nil
 }
 
@@ -80,17 +81,24 @@ func (m *Memory) GetHive(id string) (domain.Hive, bool) {
 }
 
 // inspectionScheduleLocked 按当前已保存的巡检记录推算某只蜂箱的下一次巡检安排。
-// 还没有任何巡检记录的蜂箱不维护安排。
+// 安排以最近一次现场观察时间为基准；从未巡检的蜂箱已经到期，需要立刻安排。
 func (m *Memory) inspectionScheduleLocked(hiveID string) (InspectionSchedule, bool) {
 	if _, ok := m.hives[hiveID]; !ok {
 		return InspectionSchedule{}, false
 	}
-	if len(m.inspections[hiveID]) == 0 {
-		return InspectionSchedule{}, false
+	items := m.inspections[hiveID]
+	if len(items) == 0 {
+		return InspectionSchedule{HiveID: hiveID, DueAt: time.Time{}}, true
+	}
+	latest := items[0].ObservedAt
+	for _, item := range items[1:] {
+		if item.ObservedAt.After(latest) {
+			latest = item.ObservedAt
+		}
 	}
 	return InspectionSchedule{
 		HiveID: hiveID,
-		DueAt:  time.Now().UTC().Add(inspectionDueWindow),
+		DueAt:  latest.UTC().Add(inspectionDueWindow),
 	}, true
 }
 
@@ -150,6 +158,7 @@ func (m *Memory) AdvanceHive(hiveID string, target domain.HiveState, _ time.Time
 
 // AddInspection 分配巡检编号、写入记录，并推进蜂箱的最近巡检时间。
 // 蜂箱存在与可接受巡检的判定与写入处于同一把锁，避免退役与巡检之间的竞态。
+// 补录的历史观察不会把最近巡检时间往回拨。
 func (m *Memory) AddInspection(hiveID string, inspection domain.Inspection) (domain.Inspection, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -167,8 +176,10 @@ func (m *Memory) AddInspection(hiveID string, inspection domain.Inspection) (dom
 	m.refreshInspectionScheduleLocked(hiveID)
 
 	observedAt := inspection.ObservedAt
-	hive.LastInspectionAt = &observedAt
-	m.hives[hiveID] = hive
+	if hive.LastInspectionAt == nil || observedAt.After(*hive.LastInspectionAt) {
+		hive.LastInspectionAt = &observedAt
+		m.hives[hiveID] = hive
+	}
 	return inspection, nil
 }
 
