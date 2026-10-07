@@ -23,7 +23,7 @@ type InspectionDue struct {
 	DueAt  time.Time
 }
 
-// InspectionDues 返回蜂场下已经登记过巡检安排的蜂箱。
+// InspectionDues 返回蜂场下各蜂箱登记的下一次巡检安排；每只蜂箱都维护一条安排。
 func (s Snapshot) InspectionDues(apiaryID string) []InspectionDue {
 	hives := s.ApiaryHives(apiaryID)
 	dues := make([]InspectionDue, 0, len(hives))

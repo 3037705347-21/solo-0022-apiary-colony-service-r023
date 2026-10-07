@@ -69,6 +69,7 @@ func (m *Memory) CreateHive(hive domain.Hive) error {
 		return domain.Conflict("蜂箱 %q 已存在", hive.ID)
 	}
 	m.hives[hive.ID] = hive
+	m.refreshInspectionScheduleLocked(hive.ID)
 	return nil
 }
 
@@ -80,17 +81,25 @@ func (m *Memory) GetHive(id string) (domain.Hive, bool) {
 }
 
 // inspectionScheduleLocked 按当前已保存的巡检记录推算某只蜂箱的下一次巡检安排。
-// 还没有任何巡检记录的蜂箱不维护安排。
+// 安排时间由最近一次现场观察时间加固定间隔推导，补录历史观察不会把到期时间推后。
+// 还没有任何巡检记录的蜂箱自始待巡检，安排时间取零值，任何查询时刻都已到期。
 func (m *Memory) inspectionScheduleLocked(hiveID string) (InspectionSchedule, bool) {
 	if _, ok := m.hives[hiveID]; !ok {
 		return InspectionSchedule{}, false
 	}
-	if len(m.inspections[hiveID]) == 0 {
-		return InspectionSchedule{}, false
+	items := m.inspections[hiveID]
+	if len(items) == 0 {
+		return InspectionSchedule{HiveID: hiveID, DueAt: time.Time{}}, true
+	}
+	latest := items[0].ObservedAt
+	for _, item := range items[1:] {
+		if item.ObservedAt.After(latest) {
+			latest = item.ObservedAt
+		}
 	}
 	return InspectionSchedule{
 		HiveID: hiveID,
-		DueAt:  time.Now().UTC().Add(inspectionDueWindow),
+		DueAt:  latest.Add(inspectionDueWindow),
 	}, true
 }
 
@@ -167,7 +176,9 @@ func (m *Memory) AddInspection(hiveID string, inspection domain.Inspection) (dom
 	m.refreshInspectionScheduleLocked(hiveID)
 
 	observedAt := inspection.ObservedAt
-	hive.LastInspectionAt = &observedAt
+	if hive.LastInspectionAt == nil || observedAt.After(*hive.LastInspectionAt) {
+		hive.LastInspectionAt = &observedAt
+	}
 	m.hives[hiveID] = hive
 	return inspection, nil
 }
